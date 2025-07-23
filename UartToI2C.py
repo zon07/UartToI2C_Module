@@ -1,4 +1,4 @@
-"""UART-to-I2C Bridge Protocol Module (Simplified API)."""
+"""UART-to-I2C Bridge Protocol Module"""
 
 import serial
 from enum import IntEnum
@@ -19,36 +19,40 @@ class Status(IntEnum):
     CRC_ERROR = 0x02
 
 class UartToI2C:
-    """Класс для работы с UART-to-I2C мостом через упрощённый API.
+    """Класс для работы с UART-to-I2C мостом.
     
     Публичные методы:
-        - connect(port, baudrate=9600)
+        - connect(port, baudrate=9600) -> bool
         - disconnect()
         - i2c_write(addr, cmd, data=None) -> bool
-        - i2c_read(addr, cmd, length=1) -> bytes | None
-        - gpio_read(pin) -> int | None
+        - i2c_read(addr, cmd, length=1) -> bytes|None
+        - gpio_read(pin) -> int|None
         - gpio_write(pin, state) -> bool
         - ping() -> bool
     """
 
     def __init__(self):
+        """Инициализация моста (без подключения)"""
         self._ser = None
         self._use_crc = True
         self._rx_queue = queue.Queue()
         self._running = False
+        self._packet_id = 0
+        #self._byte_delay = 0.001  # 1ms задержка между байтами
 
-    def connect(self, port, baudrate=9600):
+    def connect(self, port, baudrate=9600, byte_delay=0.002):
         """Подключиться к устройству.
         
         Args:
-            port (str): Порт (например, "COM3" или "/dev/ttyUSB0").
-            baudrate (int): Скорость UART (по умолчанию 9600).
-        
+            port (str): Порт (например, "COM3" или "/dev/ttyUSB0")
+            baudrate (int): Скорость UART (по умолчанию 9600)
+            
         Returns:
-            bool: Успешность подключения.
+            bool: Успешность подключения
         """
         try:
             self._ser = serial.Serial(port, baudrate, timeout=1)
+            self._byte_delay = byte_delay
             self._running = True
             threading.Thread(target=self._read_thread, daemon=True).start()
             return True
@@ -57,7 +61,7 @@ class UartToI2C:
             return False
 
     def disconnect(self):
-        """Отключиться от устройства."""
+        """Отключиться от устройства"""
         self._running = False
         if self._ser and self._ser.is_open:
             self._ser.close()
@@ -66,12 +70,12 @@ class UartToI2C:
         """Запись данных по I2C.
         
         Args:
-            addr (int): 7-битный адрес устройства (0x00-0x7F).
-            cmd (int): 16-битная команда (например, 0x1234).
-            data (bytes, optional): Данные для записи. По умолчанию None.
-        
+            addr (int): 7-битный адрес устройства (0x00-0x7F)
+            cmd (int): 16-битная команда
+            data (bytes, optional): Данные для записи
+            
         Returns:
-            bool: True, если команда отправлена успешно.
+            bool: True если команда отправлена успешно
         """
         cmd_bytes = bytes([(cmd >> 8) & 0xFF, cmd & 0xFF])
         write_len = len(data) if data else 0
@@ -82,12 +86,12 @@ class UartToI2C:
         """Чтение данных по I2C.
         
         Args:
-            addr (int): 7-битный адрес устройства.
-            cmd (int): 16-битная команда.
-            length (int): Количество байт для чтения (по умолчанию 1).
-        
+            addr (int): 7-битный адрес устройства
+            cmd (int): 16-битная команда
+            length (int): Количество байт для чтения
+            
         Returns:
-            bytes | None: Прочитанные данные или None при ошибке.
+            bytes|None: Прочитанные данные или None при ошибке
         """
         cmd_bytes = bytes([(cmd >> 8) & 0xFF, cmd & 0xFF])
         payload = bytes([addr, length]) + cmd_bytes
@@ -103,10 +107,10 @@ class UartToI2C:
         """Чтение состояния GPIO.
         
         Args:
-            pin (int): Номер пина (0-2).
-        
+            pin (int): Номер пина (0-2)
+            
         Returns:
-            int | None: 0/1 (LOW/HIGH) или None при ошибке.
+            int|None: 0/1 (LOW/HIGH) или None при ошибке
         """
         if not self._send_packet(Command.GPIO_READ, bytes([pin])):
             return None
@@ -120,11 +124,11 @@ class UartToI2C:
         """Запись состояния GPIO.
         
         Args:
-            pin (int): Номер пина (1-2, так как пин 0 только для чтения).
-            state (int): 0 (LOW) или 1 (HIGH).
-        
+            pin (int): Номер пина (1-2)
+            state (int): 0 (LOW) или 1 (HIGH)
+            
         Returns:
-            bool: True, если команда выполнена успешно.
+            bool: True если команда выполнена успешно
         """
         payload = bytes([pin, state])
         if not self._send_packet(Command.GPIO_WRITE, payload):
@@ -137,7 +141,7 @@ class UartToI2C:
         """Проверка связи с устройством.
         
         Returns:
-            bool: True, если устройство ответило.
+            bool: True если устройство ответило
         """
         if not self._send_packet(Command.PING):
             return False
@@ -145,7 +149,7 @@ class UartToI2C:
         response = self._wait_response(timeout=1.0)
         return response is not None and response[0] == Status.OK
 
-    # Приватные методы (инкапсулированная логика)
+    # Приватные методы
     def _calculate_crc(self, current_crc, new_byte):
         crc = current_crc ^ new_byte
         for _ in range(8):
@@ -156,8 +160,8 @@ class UartToI2C:
         if not self._ser or not self._ser.is_open:
             return False
         
-        packet_id = 1  # Фиксированный ID для упрощения
-        payload = bytes([packet_id, cmd]) + (data if data else bytes())
+        self._packet_id = (self._packet_id + 1) % 256
+        payload = bytes([self._packet_id, cmd]) + (data if data else bytes())
         packet = bytes([0x41, 0x41, len(payload)]) + payload
         
         if self._use_crc:
@@ -168,22 +172,16 @@ class UartToI2C:
             packet += bytes([crc])
         
         try:
+            # Отправка с задержкой между байтами
             for byte in packet:
                 self._ser.write(bytes([byte]))
-                time.sleep(0.002)
+                time.sleep(self._byte_delay)  # Задержка между байтами
+            
+            self._ser.flush()
             return True
         except Exception as e:
             print(f"Send error: {e}")
             return False
-
-    def _wait_response(self, timeout=1.0):
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if not self._rx_queue.empty():
-                event_type, data = self._rx_queue.get()
-                if event_type == "DATA":
-                    return data
-        return None
 
     def _read_thread(self):
         buffer = bytes()
@@ -222,4 +220,13 @@ class UartToI2C:
                         self._rx_queue.put(("DATA", payload[2:]))  # Игнорируем packet_id и cmd
             except Exception as e:
                 self._rx_queue.put(("ERROR", str(e)))
-                break
+                time.sleep(0.1)
+
+    def _wait_response(self, timeout=1.0):
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if not self._rx_queue.empty():
+                event_type, data = self._rx_queue.get()
+                if event_type == "DATA":
+                    return data
+        return None
